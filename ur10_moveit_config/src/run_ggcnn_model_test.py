@@ -19,10 +19,8 @@ from geometry_msgs.msg import PoseStamped
 from sensor_msgs.msg import Image, CameraInfo
 from std_msgs.msg import Float32MultiArray
 
-
+# CPU used here
 os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
-
-
 bridge = CvBridge()
 
 
@@ -212,10 +210,10 @@ def depth_callback(depth_message):
     with TimeIt('Publish'):
         print('Publish..')
         # Publish the output images (not used for control, only visualisation)
-        grasp_img = bridge.cv2_to_imgmsg(grasp_img, 'rgb8')
+        grasp_img = bridge.cv2_to_imgmsg(grasp_img)
         grasp_img.header = depth_message.header
         grasp_pub.publish(grasp_img)
-        grasp_img_plain = bridge.cv2_to_imgmsg(grasp_img_plain, 'rgb8')
+        grasp_img_plain = bridge.cv2_to_imgmsg(grasp_img_plain)
         grasp_img_plain.header = depth_message.header
         grasp_plain_pub.publish(grasp_img_plain)
         depth_pub.publish(bridge.cv2_to_imgmsg(depth_crop))
