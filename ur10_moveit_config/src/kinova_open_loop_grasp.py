@@ -65,7 +65,7 @@ def execute_grasp():
     g_width = 2 * ((CURR_Z + 0.07)) * np.tan(0.1 * grip_width / 2.0 / 180.0 * np.pi) * 1000
     # Convert into motor positions.
     g = min((1 - (min(g_width, 70)/70)) * (6800-4000) + 4000, 5500)
-    set_finger_positions([g, g])
+    # set_finger_positions([g, g])
 
     rospy.sleep(0.5)
 
@@ -173,7 +173,7 @@ if __name__ == '__main__':
     while not rospy.is_shutdown():
 
         rospy.sleep(0.5)
-        set_finger_positions([0, 0])
+        # set_finger_positions([0, 0])
         rospy.sleep(0.5)
         raw_input('Press Enter to Start.')
         # start_record_srv(std_srvs.srv.TriggerRequest())

@@ -62,10 +62,7 @@ def move_robot(pos1,grab_pos):
     gripper.move_and_wait_for_pos(150, 255, 255)
     pos1[2]=pos1[2]+0.18
     move(pos1)
-    
-    
-    
-    
+
     grab_pos[2]=grab_pos[2]+0.18
     move(grab_pos)
     # grab_pos[2]=0.365

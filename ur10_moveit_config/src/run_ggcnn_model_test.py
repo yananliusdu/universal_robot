@@ -13,11 +13,13 @@ import scipy.ndimage as ndimage
 from skimage.draw import disk
 from skimage.feature import peak_local_max
 
-import rospy
+import rospy, sys
 from cv_bridge import CvBridge
 from geometry_msgs.msg import PoseStamped
 from sensor_msgs.msg import Image, CameraInfo
 from std_msgs.msg import Float32MultiArray
+import moveit_commander
+
 
 # CPU used here
 os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
@@ -82,14 +84,21 @@ class TimeIt:
 #     global ROBOT_Z
 #     ROBOT_Z = data.pose.position.z
 
+def return_tip():
+    pos=arm.get_current_pose().pose
+    # tip=[pos.position.x,pos.position.y,pos.position.z]
+    # global ROBOT_Z
+    Z = pos.position.z
+    return Z
 
 def depth_callback(depth_message):
     global model
     global graph
     global prev_mp
-    global ROBOT_Z
+    # global ROBOT_Z
     global fx, cx, fy, cy
-    print('broadcasting..')
+    ROBOT_Z = return_tip()
+    print('broadcasting.. tip_z', ROBOT_Z)
 
     with TimeIt('Crop'):
         print('croping..')
@@ -225,8 +234,22 @@ def depth_callback(depth_message):
 
 
 depth_sub = rospy.Subscriber('/camera/depth/image_meters', Image, depth_callback, queue_size=1)
-#robot_pos_sub = rospy.Subscriber('/m1n6s200_driver/out/tool_pose', PoseStamped, robot_pos_callback, queue_size=1)
+# robot_pos_sub = rospy.Subscriber('/base_link/out/tool_pose', PoseStamped, robot_pos_callback, queue_size=1)
 
-while not rospy.is_shutdown():
-    rospy.spin()
+if __name__ == "__main__":
+
+    # nh=rospy.init_node('agent',anonymous=True)
+    moveit_commander.roscpp_initialize(sys.argv)
+    arm=moveit_commander.MoveGroupCommander('manipulator')
+    reference_frame = 'base_link'
+    arm.set_pose_reference_frame(reference_frame)
+    arm.set_goal_joint_tolerance(0.001)
+    arm.set_max_acceleration_scaling_factor(0.02)
+    arm.set_max_velocity_scaling_factor(0.02)
+    arm.set_planer_id = "RRTkConfigDefault"
+    arm.set_planning_time(50)
+
+    while not rospy.is_shutdown():
+        rospy.spin()
+        print('test')
 
