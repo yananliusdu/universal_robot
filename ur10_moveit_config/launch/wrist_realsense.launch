@@ -216,9 +216,9 @@ Processing enabled by this node:
         <remap from="image_raw" to="$(arg namespace)/aligned_depth_to_color/image_raw"/>
         <remap from="image" to="$(arg namespace)/depth/image_meters_aligned"/>
   </node> -->
-
+  
   <node pkg="tf" type="static_transform_publisher" name="realsense_link_broadcaster"
-        args="0.040 -0.0175 0.066 3.1415 -1.571 0 /panda_hand /camera_link 100" />
+		args="0.0 -0.1 0.08  0 -1.571 1.571  /wrist_3_link /camera_link 100" />
 
   <node name="configure_temporal_filter" pkg="dynamic_reconfigure" type="dynparam"
     args="set_from_parameters camera/temporal">
@@ -226,6 +226,7 @@ Processing enabled by this node:
       <param name="filter_smooth_alpha" value="0.1"/>
       <param name="holes_fill"          value="3"  />
     </node>
+
 
 
 </launch>
