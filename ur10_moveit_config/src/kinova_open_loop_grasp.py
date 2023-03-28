@@ -32,26 +32,61 @@ def robot_wrench_callback(msg):
         MOVING = False
         rospy.logerr('Force Detected. Stopping.')
 
+def gripper_grasp_width(width):
+    control_instruction = int(255.0/85.0*width)
+    gripper.move_and_wait_for_pos(255-control_instruction, 255, 255)
+    print('grasp done')
+
+def move_to_pose(pose):
+    # Wrapper for move to position.
+    # p = pose.position
+    # o = pose.orientation
+    # move_to_position([p.x, p.y, p.z], [o.x, o.y, o.z, o.w])
+
+    target_pose = Pose()
+    target_pose.position.x = pose.position.x
+    target_pose.position.y = pose.position.y
+    target_pose.position.z = pose.position.z
+    target_pose.orientation.x = pose.orientation.x
+    target_pose.orientation.y = pose.orientation.y
+    target_pose.orientation.z = pose.orientation.z
+    target_pose.orientation.w = pose.orientation.w
+    arm.set_pose_target(target_pose)
+    # Plan and execute the trajectory
+    print('move start')
+    plan = arm.go(wait=True)
+    arm.stop()
+    # arm.clear_pose_targets()
+    print('move done')
 
 
-
-# def move_to_pose(pose):
-#     # Wrapper for move to position.
-#     p = pose.position
-#     o = pose.orientation
-#     move_to_position([p.x, p.y, p.z], [o.x, o.y, o.z, o.w])
+    # target_pose = PoseStamped()
+    # target_pose.header.frame_id = reference_frame
+    # target_pose.header.stamp = rospy.Time.now()
+    # target_pose.pose.position.x= pose.position.x
+    # target_pose.pose.position.y= pose.position.y
+    # target_pose.pose.position.z= pose.position.z
+    # target_pose.pose.orientation.x = pose.orientation.x
+    # target_pose.pose.orientation.y = pose.orientation.y
+    # target_pose.pose.orientation.z = pose.orientation.z
+    # target_pose.pose.orientation.w = pose.orientation.w
+    # arm.set_joint_value_target(target_pose,True)
+    # plan_=arm.plan()
+    # if type(plan_) is tuple:
+    #     # noetic
+    #     success, plan, planning_time, error_code = plan_
+    # arm.execute(plan)
 
 def log_info(gripper):
     print(f"Pos: {str(gripper.get_current_position()): >3}  "
           f"Open: {gripper.is_open(): <2}  "
           f"Closed: {gripper.is_closed(): <2}  ")
 
-
-def execute_grasp():
+def execute_grasp(gripper):
     # Execute a grasp.
-    global MOVING
-    global start_force_srv
-    global stop_force_srv
+    # global MOVING
+    # global start_force_srv
+    # global stop_force_srv
 
     # Get the positions. image positions from gg-cnn
     msg = rospy.wait_for_message('/ggcnn/out/command', std_msgs.msg.Float32MultiArray)
@@ -72,11 +107,10 @@ def execute_grasp():
     # g = min((1 - (min(g_width, 70)/70)) * (6800-4000) + 4000, 5500)
     # # set_finger_positions([g, g])
     print('finger width',g_width)
-    gripper.move_and_wait_for_pos(int(g_width), 255, 255)
-
-
+    # gripper.move_and_wait_for_pos(int(g_width), 255, 255)
+    # width range 0-85
+    gripper_grasp_width(85)
     rospy.sleep(0.5)
-
     # Pose of the grasp (position only) in the camera frame.
     gp = geometry_msgs.msg.Pose()
     gp.position.x = d[0]
@@ -92,18 +126,22 @@ def execute_grasp():
     gp_base.orientation.y = q[1]
     gp_base.orientation.z = q[2]
     gp_base.orientation.w = q[3]
-
     publish_pose_as_transform(gp_base, 'base_link', 'G', 0.5)
-
     # Offset for initial pose.
     initial_offset = 0.20
     gp_base.position.z += initial_offset
-
+    print("gp_base", gp_base)
     # Disable force control, makes the robot more accurate.
     # stop_force_srv.call(kinova_msgs.srv.StopRequest())
+    move_to_pose(gp_base)
+    rospy.sleep(0.1)
+    print('start grasping')
+    gripper_grasp_width(g_width)
 
-    # move_to_pose(gp_base)
-    # rospy.sleep(0.1)
+    gp_base.position.z += initial_offset
+    move_to_pose(gp_base)
+    print('all done')
+
     #
     # # Start force control, helps prevent bad collisions.
     # start_force_srv.call(moveit_msgs.srv.StartRequest())
@@ -150,7 +188,6 @@ def execute_grasp():
     #
     # return
 
-
 if __name__ == '__main__':
     nh=rospy.init_node('ggcnn_open_loop_grasp',anonymous=True)
     moveit_commander.roscpp_initialize(sys.argv)
@@ -162,6 +199,15 @@ if __name__ == '__main__':
     arm.set_max_velocity_scaling_factor(0.02)
     arm.set_planer_id = "RRTkConfigDefault"
     arm.set_planning_time(50)
+    # Robot Monitors.
+    wrench_sub = rospy.Subscriber('/wrench', geometry_msgs.msg.WrenchStamped, robot_wrench_callback, queue_size=1)
+    # position_sub = rospy.Subscriber('/base_link/out/tool_pose', geometry_msgs.msg.PoseStamped, robot_position_callback, queue_size=1)
+    # https://github.com/dougsm/rosbag_recording_services
+    # start_record_srv = rospy.ServiceProxy('/data_recording/start_recording', std_srvs.srv.Trigger)
+    # stop_record_srv = rospy.ServiceProxy('/data_recording/stop_recording', std_srvs.srv.Trigger)
+    # Enable/disable force control.
+    # start_force_srv = rospy.ServiceProxy('/base_link/in/start_force_control', moveit_msgs.srv.Start)
+    # stop_force_srv = rospy.ServiceProxy('/base_link/in/stop_force_control', moveit_msgs.srv.Stop)
 
     # pose & angle test
     pos=arm.get_current_pose().pose
@@ -175,47 +221,30 @@ if __name__ == '__main__':
     gripper = robotiq_gripper.RobotiqGripper()
     print("Connecting to gripper...")
     gripper.connect(ip, 63352)
-    # print("Activating gripper...")
-    # gripper.activate()
-    # print("Testing gripper...")
-    gripper.move_and_wait_for_pos(0, 20, 255)
-
-    # Robot Monitors.
-    wrench_sub = rospy.Subscriber('/wrench', geometry_msgs.msg.WrenchStamped, robot_wrench_callback, queue_size=1)
-    # position_sub = rospy.Subscriber('/base_link/out/tool_pose', geometry_msgs.msg.PoseStamped, robot_position_callback, queue_size=1)
-
-
-    # https://github.com/dougsm/rosbag_recording_services
-    # start_record_srv = rospy.ServiceProxy('/data_recording/start_recording', std_srvs.srv.Trigger)
-    # stop_record_srv = rospy.ServiceProxy('/data_recording/stop_recording', std_srvs.srv.Trigger)
-
-    # Enable/disable force control.
-    # start_force_srv = rospy.ServiceProxy('/base_link/in/start_force_control', moveit_msgs.srv.Start)
-    # stop_force_srv = rospy.ServiceProxy('/base_link/in/stop_force_control', moveit_msgs.srv.Stop)
+    print("Activating gripper...")
+    gripper.activate()
+    print("Testing gripper...")
+    gripper_grasp_width(85)
 
     # Home position.
     home_joints = [1.2071189880371094, -1.5567658583270472, -1.5380070845233362, -1.6654790083514612, 1.5725183486938477, 0.004621791187673807]
     # Home pose
     home_pose = [-0.3914873222751472, -0.5714791260991916, 0.6681575664171412, 0.18301956387920323,0.9828197055899452, 0.021988522054863558, 0.009261233146959685]
-
     #move to home
-    # arm.set_joint_value_target(home_joints)
-    # arm.go()
-
-    # execute_grasp()
-
-
-    while not rospy.is_shutdown():
-
-        rospy.sleep(0.5)
-        # set_finger_positions([0, 0])
-        rospy.sleep(0.5)
-        # raw_input('Press Enter to Start.')
-        # start_record_srv(std_srvs.srv.TriggerRequest())
-        rospy.sleep(0.5)
-
-        execute_grasp()
-        # move_to_position([0, -0.38, 0.25], [0.99, 0, 0, np.sqrt(1-0.99**2)])
-        rospy.sleep(0.5)
-        # stop_record_srv(std_srvs.srv.TriggerRequest())
-        # raw_input('Press Enter to Complete')
+    arm.set_joint_value_target(home_joints)
+    arm.go()
+    rospy.sleep(0.5)
+    execute_grasp(gripper)
+    #
+    # while not rospy.is_shutdown():
+    #     rospy.sleep(0.5)
+    #     # set_finger_positions
+    #     gripper.move_and_wait_for_pos(0, 255, 255)
+    #     rospy.sleep(0.5)
+    #     # start_record_srv(std_srvs.srv.TriggerRequest())
+    #     rospy.sleep(0.5)
+    #     execute_grasp()
+    #     # move_to_position([0, -0.38, 0.25], [0.99, 0, 0, np.sqrt(1-0.99**2)])
+    #     rospy.sleep(0.5)
+    #     # stop_record_srv(std_srvs.srv.TriggerRequest())
+    #     # raw_input('Press Enter to Complete')
