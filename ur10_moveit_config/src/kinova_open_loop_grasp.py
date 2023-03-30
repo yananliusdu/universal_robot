@@ -32,9 +32,9 @@ def robot_wrench_callback(msg):
         MOVING = False
         rospy.logerr('Force Detected. Stopping.')
 
-def gripper_grasp_width(width):
+def gripper_grasp_width(gripper, width):
     control_instruction = int(255.0/85.0*width)
-    gripper.move_and_wait_for_pos(255-control_instruction, 255, 255)
+    gripper.move_and_wait_for_pos(255-control_instruction, 10, 10)
     print('grasp done')
 
 def move_to_pose(pose):
@@ -108,8 +108,6 @@ def execute_grasp(gripper):
     # # set_finger_positions([g, g])
     print('finger width',g_width)
     # gripper.move_and_wait_for_pos(int(g_width), 255, 255)
-    # width range 0-85
-    gripper_grasp_width(85)
     rospy.sleep(0.5)
     # Pose of the grasp (position only) in the camera frame.
     gp = geometry_msgs.msg.Pose()
@@ -128,7 +126,7 @@ def execute_grasp(gripper):
     gp_base.orientation.w = q[3]
     publish_pose_as_transform(gp_base, 'base_link', 'G', 0.5)
     # Offset for initial pose.
-    initial_offset = 0.20
+    initial_offset = 0.2
     gp_base.position.z += initial_offset
     print("gp_base", gp_base)
     # Disable force control, makes the robot more accurate.
@@ -136,11 +134,15 @@ def execute_grasp(gripper):
     move_to_pose(gp_base)
     rospy.sleep(0.1)
     print('start grasping')
-    gripper_grasp_width(g_width)
-
-    gp_base.position.z += initial_offset
-    move_to_pose(gp_base)
+    g_width = 20
+    gripper_grasp_width(gripper, g_width)
     print('all done')
+
+    up_distance = 0.1
+    gp_base.position.z += up_distance
+    move_to_pose(gp_base)
+
+
 
     #
     # # Start force control, helps prevent bad collisions.
@@ -224,27 +226,53 @@ if __name__ == '__main__':
     print("Activating gripper...")
     gripper.activate()
     print("Testing gripper...")
-    gripper_grasp_width(85)
+    gripper_grasp_width(gripper, 85)
 
     # Home position.
     home_joints = [1.2071189880371094, -1.5567658583270472, -1.5380070845233362, -1.6654790083514612, 1.5725183486938477, 0.004621791187673807]
     # Home pose
     home_pose = [-0.3914873222751472, -0.5714791260991916, 0.6681575664171412, 0.18301956387920323,0.9828197055899452, 0.021988522054863558, 0.009261233146959685]
-    #move to home
+    tcp1 = [-0.13851848713643922, -0.5736609613936515,0.44311404854058567, 0.09857153974906152, 0.9948931930812682, 0.01896440175118907, 0.010561125805382862]
+    TCP = geometry_msgs.msg.Pose()
+    TCP.position.x = tcp1[0]
+    TCP.position.y = tcp1[1]
+    TCP.position.z = tcp1[2]
+    TCP.orientation.x = tcp1[3]
+    TCP.orientation.y = tcp1[4]
+    TCP.orientation.z = tcp1[5]
+    TCP.orientation.w = tcp1[6]
+
+    joint_release = [1.6262117624282837, -1.5525367895709437, -1.9304898420916956, -1.196756664906637, 1.572998046875, 0.0050779408775269985]
+
+    # execute_grasp(gripper)
+
     arm.set_joint_value_target(home_joints)
     arm.go()
-    rospy.sleep(0.5)
-    execute_grasp(gripper)
-    #
-    # while not rospy.is_shutdown():
-    #     rospy.sleep(0.5)
-    #     # set_finger_positions
-    #     gripper.move_and_wait_for_pos(0, 255, 255)
-    #     rospy.sleep(0.5)
-    #     # start_record_srv(std_srvs.srv.TriggerRequest())
-    #     rospy.sleep(0.5)
-    #     execute_grasp()
-    #     # move_to_position([0, -0.38, 0.25], [0.99, 0, 0, np.sqrt(1-0.99**2)])
-    #     rospy.sleep(0.5)
-    #     # stop_record_srv(std_srvs.srv.TriggerRequest())
-    #     # raw_input('Press Enter to Complete')
+
+    while not rospy.is_shutdown():
+        #move to home
+        arm.set_joint_value_target(home_joints)
+        arm.go()
+        rospy.sleep(0.5)
+
+        # set_finger_positions
+        gripper_grasp_width(gripper, 85)
+        rospy.sleep(0.5)
+        # start_record_srv(std_srvs.srv.TriggerRequest())
+        execute_grasp(gripper)
+        rospy.sleep(0.5)
+
+        # move to release
+        arm.set_joint_value_target(joint_release)
+        arm.go()
+        # move_to_pose(TCP)
+
+        #open gripper
+        gripper_grasp_width(gripper, 85)
+        print('a loop done')
+
+
+        # move_to_position([0, -0.38, 0.25], [0.99, 0, 0, np.sqrt(1-0.99**2)])
+        # rospy.sleep(0.5)
+        # stop_record_srv(std_srvs.srv.TriggerRequest())
+        # raw_input('Press Enter to Complete')

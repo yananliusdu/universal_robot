@@ -218,7 +218,7 @@ Processing enabled by this node:
   </node> -->
   
   <node pkg="tf" type="static_transform_publisher" name="realsense_link_broadcaster"
-		args="0.0 -0.1 0.08  0 -1.571 1.571  /wrist_3_link /camera_link 100" />
+		args="0.0 -0.095 0.08  0 -1.571 1.571  /wrist_3_link /camera_link 100" />
 
   <node name="configure_temporal_filter" pkg="dynamic_reconfigure" type="dynparam"
     args="set_from_parameters camera/temporal">
