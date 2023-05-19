@@ -250,31 +250,9 @@ if __name__ == '__main__':
     arm.set_joint_value_target(home_joints)
     arm.go()
 
-
-    while not rospy.is_shutdown():
-        #move to home
-        arm.set_joint_value_target(home_joints)
-        arm.go()
-        rospy.sleep(0.5)
-
-        # set_finger_positions
-        gripper_grasp_width(gripper, 85)
-        rospy.sleep(0.5)
-        # start_record_srv(std_srvs.srv.TriggerRequest())
-        execute_grasp(gripper)
-        rospy.sleep(0.5)
-
-        # move to release
-        arm.set_joint_value_target(joint_release)
-        arm.go()
-        # move_to_pose(TCP)
-
-        #open gripper
-        gripper_grasp_width(gripper, 85)
-        print('a loop done')
+    print('all done')
+    joints=arm.get_current_joint_values()
+    print('current joints', np.array(joints)*180.0/math.pi)
+    print('current joints', joints)
 
 
-        # move_to_position([0, -0.38, 0.25], [0.99, 0, 0, np.sqrt(1-0.99**2)])
-        # rospy.sleep(0.5)
-        # stop_record_srv(std_srvs.srv.TriggerRequest())
-        # raw_input('Press Enter to Complete')

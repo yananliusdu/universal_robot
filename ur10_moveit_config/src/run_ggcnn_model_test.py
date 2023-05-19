@@ -29,7 +29,7 @@ bridge = CvBridge()
 #disable the eager model
 tf.compat.v1.disable_eager_execution()
 # Load the Network.
-MODEL_FILE = 'epoch_29_model.hdf5'
+MODEL_FILE = 'models/epoch_29_model.hdf5'
 sess = tf.compat.v1.keras.backend.get_session()
 tf.compat.v1.keras.backend.set_session(sess)
 # graph = tf.get_default_graph()

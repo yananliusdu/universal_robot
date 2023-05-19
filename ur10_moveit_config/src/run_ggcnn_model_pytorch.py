@@ -1,48 +1,49 @@
 #! /usr/bin/env python3
 
 import time
-
+import os
+from os import path
 import numpy as np
-import tensorflow as tf
-import tensorflow.keras
-from tensorflow.keras.models import load_model
+import torch
+
 
 import cv2
 import scipy.ndimage as ndimage
 from skimage.draw import disk
 from skimage.feature import peak_local_max
 
-import rospy
+import rospy, sys
 from cv_bridge import CvBridge
 from geometry_msgs.msg import PoseStamped
 from sensor_msgs.msg import Image, CameraInfo
 from std_msgs.msg import Float32MultiArray
+import moveit_commander
 
+
+# CPU used here
+os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 bridge = CvBridge()
 
-
-#disable the eager model
-tf.compat.v1.disable_eager_execution()
 # Load the Network.
-MODEL_FILE = 'models/epoch_29_model.hdf5'
-model = load_model(MODEL_FILE)
+MODEL_FILE = 'models/epoch_49_iou_0.84'
+net = torch.load(MODEL_FILE)
+net.eval()
+device = torch.device("cuda:0")
 
 rospy.init_node('ggcnn_detection')
 
 # Output publishers.
-grasp_pub = rospy.Publisher('/ggcnn/img/grasp', Image, queue_size=1)
-grasp_plain_pub = rospy.Publisher('/ggcnn/img/grasp_plain', Image, queue_size=1)
-depth_pub = rospy.Publisher('/ggcnn/img/depth', Image, queue_size=1)
-ang_pub = rospy.Publisher('/ggcnn/img/ang', Image, queue_size=1)
-cmd_pub = rospy.Publisher('/ggcnn/out/command', Float32MultiArray, queue_size=1)
+grasp_pub = rospy.Publisher('ggcnn/img/grasp', Image, queue_size=1)
+grasp_plain_pub = rospy.Publisher('ggcnn/img/grasp_plain', Image, queue_size=1)
+depth_pub = rospy.Publisher('ggcnn/img/depth', Image, queue_size=1)
+ang_pub = rospy.Publisher('ggcnn/img/ang', Image, queue_size=1)
+cmd_pub = rospy.Publisher('ggcnn/out/command', Float32MultiArray, queue_size=1)
+
 
 # Initialise some globals.
 prev_mp = np.array([150, 150])
 ROBOT_Z = 0
 
-# Tensorflow graph to allow use in callback.
-# graph = tf.get_default_graph()
-graph = tf.compat.v1.get_default_graph()
 
 # Get the camera parameters
 camera_info_msg = rospy.wait_for_message('/camera/depth/camera_info', CameraInfo)
@@ -70,19 +71,28 @@ class TimeIt:
             print('%s: %s' % (self.s, self.t1 - self.t0))
 
 
-def robot_pos_callback(data):
-    global ROBOT_Z
-    ROBOT_Z = data.pose.position.z
+# def robot_pos_callback(data):
+#     global ROBOT_Z
+#     ROBOT_Z = data.pose.position.z
 
+def return_tip():
+    pos=arm.get_current_pose().pose
+    # tip=[pos.position.x,pos.position.y,pos.position.z]
+    # global ROBOT_Z
+    Z = pos.position.z
+    return Z
 
 def depth_callback(depth_message):
     global model
     global graph
     global prev_mp
-    global ROBOT_Z
+    # global ROBOT_Z
     global fx, cx, fy, cy
+    ROBOT_Z = return_tip()
+    print('broadcasting.. tip_z', ROBOT_Z)
 
     with TimeIt('Crop'):
+        print('croping..')
         depth = bridge.imgmsg_to_cv2(depth_message)
 
         # Crop a square out of the middle of the depth and resize it to 300*300
@@ -95,6 +105,7 @@ def depth_callback(depth_message):
         depth_crop[depth_nan] = 0
 
     with TimeIt('Inpaint'):
+        print('Inpaint..')
         # open cv inpainting does weird things at the border.
         depth_crop = cv2.copyMakeBorder(depth_crop, 1, 1, 1, 1, cv2.BORDER_DEFAULT)
 
@@ -110,25 +121,26 @@ def depth_callback(depth_message):
         depth_crop = depth_crop * depth_scale
 
     with TimeIt('Calculate Depth'):
+        print('Calculate Depth..')
         # Figure out roughly the depth in mm of the part between the grippers for collision avoidance.
         depth_center = depth_crop[100:141, 130:171].flatten()
         depth_center.sort()
         depth_center = depth_center[:10].mean() * 1000.0
 
     with TimeIt('Inference'):
-        # init = tf.compat.v1.global_variables_initializer()
-        # session = tf.compat.v1.Session()
-        # session.run(init)
-        # Run it through the network.
+        print('Inference..')
         depth_crop = np.clip((depth_crop - depth_crop.mean()), -1, 1)
-        with graph.as_default():
-            pred_out = model.predict(depth_crop.reshape((1, 300, 300, 1)))
 
+        with torch.no_grad():
+            pred_out = model(depth_crop)
 
+        print('test..')
         points_out = pred_out[0].squeeze()
         points_out[depth_nan] = 0
 
+
     with TimeIt('Trig'):
+        print('Trig..')
         # Calculate the angle map.
         cos_out = pred_out[1].squeeze()
         sin_out = pred_out[2].squeeze()
@@ -137,11 +149,13 @@ def depth_callback(depth_message):
         width_out = pred_out[3].squeeze() * 150.0  # Scaled 0-150:0-1
 
     with TimeIt('Filter'):
+        print('Filter..')
         # Filter the outputs.
         points_out = ndimage.filters.gaussian_filter(points_out, 5.0)  # 3.0
         ang_out = ndimage.filters.gaussian_filter(ang_out, 2.0)
 
     with TimeIt('Control'):
+        print('Control..')
         # Calculate the best pose from the camera intrinsics.
         maxes = None
 
@@ -179,31 +193,30 @@ def depth_callback(depth_message):
             return
 
     with TimeIt('Draw'):
+        print('Draw..')
         # Draw grasp markers on the points_out and publish it. (for visualisation)
         grasp_img = np.zeros((300, 300, 3), dtype=np.uint8)
         grasp_img[:,:,2] = (points_out * 255.0)
 
         grasp_img_plain = grasp_img.copy()
 
-        rr, cc = disk(prev_mp[0], prev_mp[1], 5)
+        centre = (prev_mp[0], prev_mp[1])
+        rr, cc = disk(centre, 5)
         grasp_img[rr, cc, 0] = 0
         grasp_img[rr, cc, 1] = 255
         grasp_img[rr, cc, 2] = 0
 
     with TimeIt('Publish'):
+        print('Publish..')
         # Publish the output images (not used for control, only visualisation)
-        grasp_img = bridge.cv2_to_imgmsg(grasp_img, 'bgr8')
+        grasp_img = bridge.cv2_to_imgmsg(grasp_img)
         grasp_img.header = depth_message.header
         grasp_pub.publish(grasp_img)
-
-        grasp_img_plain = bridge.cv2_to_imgmsg(grasp_img_plain, 'bgr8')
+        grasp_img_plain = bridge.cv2_to_imgmsg(grasp_img_plain)
         grasp_img_plain.header = depth_message.header
         grasp_plain_pub.publish(grasp_img_plain)
-
         depth_pub.publish(bridge.cv2_to_imgmsg(depth_crop))
-
         ang_pub.publish(bridge.cv2_to_imgmsg(ang_out))
-
         # Output the best grasp pose relative to camera.
         cmd_msg = Float32MultiArray()
         cmd_msg.data = [x, y, z, ang, width, depth_center]
@@ -211,7 +224,22 @@ def depth_callback(depth_message):
 
 
 depth_sub = rospy.Subscriber('/camera/depth/image_meters', Image, depth_callback, queue_size=1)
-#robot_pos_sub = rospy.Subscriber('/m1n6s200_driver/out/tool_pose', PoseStamped, robot_pos_callback, queue_size=1)
+# robot_pos_sub = rospy.Subscriber('/base_link/out/tool_pose', PoseStamped, robot_pos_callback, queue_size=1)
 
-while not rospy.is_shutdown():
-    rospy.spin()
+if __name__ == "__main__":
+
+    # nh=rospy.init_node('agent',anonymous=True)
+    moveit_commander.roscpp_initialize(sys.argv)
+    arm=moveit_commander.MoveGroupCommander('manipulator')
+    reference_frame = 'base_link'
+    arm.set_pose_reference_frame(reference_frame)
+    arm.set_goal_joint_tolerance(0.001)
+    arm.set_max_acceleration_scaling_factor(0.02)
+    arm.set_max_velocity_scaling_factor(0.02)
+    arm.set_planer_id = "RRTkConfigDefault"
+    arm.set_planning_time(50)
+
+    while not rospy.is_shutdown():
+        rospy.spin()
+        print('test')
+
