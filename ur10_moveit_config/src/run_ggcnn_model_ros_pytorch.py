@@ -20,8 +20,6 @@ import moveit_commander
 import matplotlib
 import matplotlib.pyplot as plt
 from scipy import interpolate
-
-
 matplotlib.use('TkAgg')
 
 bridge = CvBridge()
@@ -38,7 +36,6 @@ model.eval()
 
 
 rospy.init_node('ggcnn_detection')
-
 
 # Output publishers.
 grasp_pub = rospy.Publisher('ggcnn/img/grasp', Image, queue_size=1)
@@ -62,6 +59,10 @@ cx = K[2]
 fy = K[4]
 cy = K[5]
 
+
+filter_num = 3
+ment_array = [[0]*6 for _ in range(filter_num)]
+callback_counter = 0
 
 # Execution Timing
 class TimeIt:
@@ -92,6 +93,8 @@ def return_tip():
     return Z
 
 def depth_callback(depth_message):
+    global ment_array
+    global callback_counter
     global model
     global graph
     global prev_mp
@@ -110,7 +113,7 @@ def depth_callback(depth_message):
         # plt.pause(0.001)
 
         array = np.copy(depth_data)
-                # Create x and y coordinates
+        # Create x and y coordinates
         x = np.arange(0, array.shape[1])
         y = np.arange(0, array.shape[0])
         xx, yy = np.meshgrid(x, y)
@@ -130,12 +133,10 @@ def depth_callback(depth_message):
 
         depth_copy_uncropped = np.copy(inpainted)
 
-        # Crop a square out of the middle of the depth and resize it to 300*300
-        # Crop a square out of the middle of the depth and resize it to 300*300
         crop_size = 300
         depth_crop = cv2.resize(inpainted[(480-crop_size)//2:(480-crop_size)//2+crop_size, (640-crop_size)//2:(640-crop_size)//2+crop_size], (300, 300))
 
-        depth_copy = np.copy(depth_crop)
+        depth_crop_copy = np.copy(depth_crop)
 
         depth_crop = depth_crop.astype(np.float32)
         depth_crop = (depth_crop - np.mean(depth_crop)) / np.std(depth_crop)  # Now, your data is standardized
@@ -166,10 +167,9 @@ def depth_callback(depth_message):
     with TimeIt('Calculate Depth'):
         print('Calculate Depth..')
         # Figure out roughly the depth in mm of the part between the grippers for collision avoidance.
-        depth_center = depth_crop[100:141, 130:171].flatten()
+        depth_center = depth_crop_copy[100:141, 130:171].flatten()
         depth_center.sort()
         depth_center = depth_center[:10].mean() # * 1000.0
-
 
 
     with TimeIt('Inference'):
@@ -207,10 +207,9 @@ def depth_callback(depth_message):
         cos_out = pred_out[1].squeeze()
         sin_out = pred_out[2].squeeze()
         ang_out = np.arctan2(sin_out, cos_out)/2.0
-
         width_out = pred_out[3].squeeze() * 150.0  # Scaled 0-150:0-1
 
-        print('ang', 'width', ang_out, width_out)
+        # print('ang', 'width', ang_out, width_out)
 
 
     with TimeIt('Filter'):
@@ -243,14 +242,14 @@ def depth_callback(depth_message):
         ang = ang_out[max_pixel[0], max_pixel[1]]
         width = width_out[max_pixel[0], max_pixel[1]]
 
-        print('ang', 'width', ang, width)
+        # print('ang', 'width', ang, width)
 
 
         # Convert max_pixel back to uncropped/resized image coordinates in order to do the camera transform.
         max_pixel = ((np.array(max_pixel) / 300.0 * crop_size) + np.array([(480 - crop_size)//2, (640 - crop_size) // 2]))
         max_pixel = np.round(max_pixel).astype(np.int)
 
-        point_depth = depth_data[max_pixel[0], max_pixel[1]]
+        point_depth = depth_copy_uncropped[max_pixel[0], max_pixel[1]]/1000.0
 
         # These magic numbers are my camera intrinsic parameters.
         x = (max_pixel[1] - cx)/(fx) * point_depth
@@ -268,7 +267,8 @@ def depth_callback(depth_message):
 
         grasp_img_plain = grasp_img.copy()
 
-        centre = (prev_mp[0], prev_mp[1])
+        # centre = (prev_mp[0], prev_mp[1])
+        centre = (min(max(prev_mp[0], 5), 294), min(max(prev_mp[1], 5), 294))
         rr, cc = disk(centre, 5)
         grasp_img[rr, cc, 0] = 0
         grasp_img[rr, cc, 1] = 255
@@ -287,10 +287,24 @@ def depth_callback(depth_message):
         ang_pub.publish(bridge.cv2_to_imgmsg(ang_out))
         # Output the best grasp pose relative to camera.
         cmd_msg = Float32MultiArray()
-        cmd_msg.data = [x, y, z, ang, width, depth_center]
-        print('cmd_msg.data', cmd_msg.data)
 
-        cmd_pub.publish(cmd_msg)
+        ment_array[callback_counter][0] = x
+        ment_array[callback_counter][1] = y
+        ment_array[callback_counter][2] = z
+        ment_array[callback_counter][3] = ang
+        ment_array[callback_counter][4] = width
+        ment_array[callback_counter][5] = depth_center
+
+        if (callback_counter+1) % filter_num == 0:
+            B = [sum(col) / len(col) for col in zip(*ment_array)]
+            cmd_msg.data = B
+            print('cmd_msg.data', cmd_msg.data)
+            cmd_pub.publish(cmd_msg)
+            callback_counter = 0
+            # Clear the list for the next cycle
+            ment_array = [[0]*6 for _ in range(filter_num)]
+
+        callback_counter += 1
 
 
 depth_sub = rospy.Subscriber('/camera/aligned_depth_to_color/image_raw', Image, depth_callback, queue_size=1)

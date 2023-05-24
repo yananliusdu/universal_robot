@@ -162,7 +162,7 @@ def depth_callback(depth_message):
         with graph.as_default():
             pred_out = model.predict(depth_crop.reshape((1, 300, 300, 1)))
         print('test..')
-        print('pred_out', pred_out)
+        # print('pred_out', pred_out)
 
         points_out = pred_out[0].squeeze()
         points_out[depth_nan] = 0
@@ -180,7 +180,7 @@ def depth_callback(depth_message):
 
         width_out = pred_out[3].squeeze() * 150.0  # Scaled 0-150:0-1
 
-        print('ang', 'width', ang_out, width_out)
+        # print('ang', 'width', ang_out, width_out)
 
 
     with TimeIt('Filter'):

@@ -198,8 +198,8 @@ if __name__ == '__main__':
     reference_frame = 'base_link'
     arm.set_pose_reference_frame(reference_frame)
     arm.set_goal_joint_tolerance(0.001)
-    arm.set_max_acceleration_scaling_factor(0.02)
-    arm.set_max_velocity_scaling_factor(0.02)
+    arm.set_max_acceleration_scaling_factor(0.05)
+    arm.set_max_velocity_scaling_factor(0.05)
     arm.set_planer_id = "RRTkConfigDefault"
     arm.set_planning_time(50)
     # Robot Monitors.

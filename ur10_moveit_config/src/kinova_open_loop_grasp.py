@@ -89,14 +89,12 @@ def execute_grasp(gripper):
     # global stop_force_srv
 
     # Get the positions. image positions from gg-cnn
+    rospy.sleep(3) # let the other node find the position calculating
     msg = rospy.wait_for_message('/ggcnn/out/command', std_msgs.msg.Float32MultiArray)
     d = list(msg.data)
-
     print('command infor', d)
-
     pos=arm.get_current_pose().pose
     CURR_Z = pos.position.z
-
     # Calculate the gripper width.
     grip_width = d[4]
     # Convert width in pixels to mm.
@@ -125,24 +123,35 @@ def execute_grasp(gripper):
     gp_base.orientation.z = q[2]
     gp_base.orientation.w = q[3]
     publish_pose_as_transform(gp_base, 'base_link', 'G', 0.5)
-    # Offset for initial pose.
-    initial_offset = 0.2
+    # Offset for initial object pose.
+
+    # move to obj over obj_over_height
+    print('move to obj over obj_over_height')
+    initial_offset = 0.40
     gp_base.position.z += initial_offset
-    print("gp_base", gp_base)
+    # print("gp_base", gp_base)
     # Disable force control, makes the robot more accurate.
     # stop_force_srv.call(kinova_msgs.srv.StopRequest())
     move_to_pose(gp_base)
     rospy.sleep(0.1)
-    print('start grasping')
-    g_width = 20
+    g_width = 70
     gripper_grasp_width(gripper, g_width)
-    print('all done')
 
+    print('start to move down to grasp object')
+    obj_over_height = -0.11
+    gp_base.position.z += obj_over_height
+    move_to_pose(gp_base)
+
+    print('start grasping')
+    g_width = 10
+    gripper_grasp_width(gripper, g_width)
+    print('grasping done')
+
+    print('moving up')
     up_distance = 0.1
     gp_base.position.z += up_distance
     move_to_pose(gp_base)
-
-
+    print('moving up done')
 
     #
     # # Start force control, helps prevent bad collisions.
@@ -198,8 +207,8 @@ if __name__ == '__main__':
     reference_frame = 'base_link'
     arm.set_pose_reference_frame(reference_frame)
     arm.set_goal_joint_tolerance(0.001)
-    arm.set_max_acceleration_scaling_factor(0.02)
-    arm.set_max_velocity_scaling_factor(0.02)
+    arm.set_max_acceleration_scaling_factor(0.05)
+    arm.set_max_velocity_scaling_factor(0.05)
     arm.set_planer_id = "RRTkConfigDefault"
     arm.set_planning_time(50)
     # Robot Monitors.
@@ -221,13 +230,13 @@ if __name__ == '__main__':
 
     #gripper test
     print("Creating gripper...")
-    # gripper = robotiq_gripper.RobotiqGripper()
+    gripper = robotiq_gripper.RobotiqGripper()
     print("Connecting to gripper...")
-    # gripper.connect(ip, 63352)
+    gripper.connect(ip, 63352)
     print("Activating gripper...")
-    # gripper.activate()
+    gripper.activate()
     print("Testing gripper...")
-    # gripper_grasp_width(gripper, 85)
+    gripper_grasp_width(gripper, 85)
 
     # Home position.
     home_joints = [1.2071189880371094, -1.5567658583270472, -1.5380070845233362, -1.6654790083514612, 1.5725183486938477, 0.004621791187673807]
@@ -244,12 +253,11 @@ if __name__ == '__main__':
     TCP.orientation.w = tcp1[6]
 
     joint_release = [1.6262117624282837, -1.5525367895709437, -1.9304898420916956, -1.196756664906637, 1.572998046875, 0.0050779408775269985]
-
     # execute_grasp(gripper)
 
     arm.set_joint_value_target(home_joints)
     arm.go()
-
+    rospy.sleep(0.5)
 
     while not rospy.is_shutdown():
         #move to home
@@ -258,19 +266,20 @@ if __name__ == '__main__':
         rospy.sleep(0.5)
 
         # set_finger_positions
-        # gripper_grasp_width(gripper, 85)
-        rospy.sleep(0.5)
+        gripper_grasp_width(gripper, 85)
+        rospy.sleep(3)
+
         # start_record_srv(std_srvs.srv.TriggerRequest())
-        # execute_grasp(gripper)
+        execute_grasp(gripper)
         rospy.sleep(0.5)
 
         # move to release
         arm.set_joint_value_target(joint_release)
         arm.go()
-        # move_to_pose(TCP)
+        move_to_pose(TCP)
 
         #open gripper
-        # gripper_grasp_width(gripper, 85)
+        gripper_grasp_width(gripper, 85)
         print('a loop done')
 
 
