@@ -203,7 +203,7 @@ if __name__ == '__main__':
     arm.set_planer_id = "RRTkConfigDefault"
     arm.set_planning_time(50)
     # Robot Monitors.
-    wrench_sub = rospy.Subscriber('/wrench', geometry_msgs.msg.WrenchStamped, robot_wrench_callback, queue_size=1)
+    # wrench_sub = rospy.Subscriber('/wrench', geometry_msgs.msg.WrenchStamped, robot_wrench_callback, queue_size=1)
     # position_sub = rospy.Subscriber('/base_link/out/tool_pose', geometry_msgs.msg.PoseStamped, robot_position_callback, queue_size=1)
     # https://github.com/dougsm/rosbag_recording_services
     # start_record_srv = rospy.ServiceProxy('/data_recording/start_recording', std_srvs.srv.Trigger)
@@ -221,13 +221,13 @@ if __name__ == '__main__':
 
     #gripper test
     print("Creating gripper...")
-    gripper = robotiq_gripper.RobotiqGripper()
+    # gripper = robotiq_gripper.RobotiqGripper()
     print("Connecting to gripper...")
-    gripper.connect(ip, 63352)
+    # gripper.connect(ip, 63352)
     print("Activating gripper...")
-    gripper.activate()
+    # gripper.activate()
     print("Testing gripper...")
-    gripper_grasp_width(gripper, 85)
+    # gripper_grasp_width(gripper, 85)
 
     # Home position.
     home_joints = [1.2071189880371094, -1.5567658583270472, -1.5380070845233362, -1.6654790083514612, 1.5725183486938477, 0.004621791187673807]

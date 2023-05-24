@@ -4,10 +4,7 @@ import time
 import os
 from os import path
 import numpy as np
-import tensorflow as tf
-import tensorflow.keras
-from tensorflow.keras.models import load_model
-
+import torch
 import cv2
 import scipy.ndimage as ndimage
 from skimage.draw import disk
@@ -20,26 +17,28 @@ from sensor_msgs.msg import Image, CameraInfo
 from std_msgs.msg import Float32MultiArray
 import moveit_commander
 
+import matplotlib
+import matplotlib.pyplot as plt
+from scipy import interpolate
 
-# CPU used here
-os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+
+matplotlib.use('TkAgg')
+
 bridge = CvBridge()
 
+# Check if CUDA is available and choose device accordingly
+device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+print('device', device)
 
-#disable the eager model
-tf.compat.v1.disable_eager_execution()
+
 # Load the Network.
-MODEL_FILE = 'models/epoch_29_model.hdf5'
-sess = tf.compat.v1.keras.backend.get_session()
-tf.compat.v1.keras.backend.set_session(sess)
-# graph = tf.get_default_graph()
-# Tensorflow graph to allow use in callback.
-graph = tf.compat.v1.get_default_graph()
-# model = load_model(MODEL_FILE)
-model = load_model(path.join(path.dirname(__file__), MODEL_FILE))
+MODEL_FILE = 'models/epoch_42_iou_0.73'
+model = torch.load(MODEL_FILE, map_location=device)
+model.eval()
 
 
 rospy.init_node('ggcnn_detection')
+
 
 # Output publishers.
 grasp_pub = rospy.Publisher('ggcnn/img/grasp', Image, queue_size=1)
@@ -55,7 +54,8 @@ ROBOT_Z = 0
 
 
 # Get the camera parameters
-camera_info_msg = rospy.wait_for_message('/camera/depth/camera_info', CameraInfo)
+camera_info_msg = rospy.wait_for_message('/camera/aligned_depth_to_color/camera_info', CameraInfo)
+print(camera_info_msg)
 K = camera_info_msg.K
 fx = K[0]
 cx = K[2]
@@ -102,51 +102,103 @@ def depth_callback(depth_message):
 
     with TimeIt('Crop'):
         print('croping..')
-        depth = bridge.imgmsg_to_cv2(depth_message)
+        aligned_depth = bridge.imgmsg_to_cv2(depth_message)
+        depth_data = np.asanyarray(aligned_depth, dtype="float16")
+
+        # plt.imshow(depth, cmap='gray')
+        # plt.show()
+        # plt.pause(0.001)
+
+        array = np.copy(depth_data)
+                # Create x and y coordinates
+        x = np.arange(0, array.shape[1])
+        y = np.arange(0, array.shape[0])
+        xx, yy = np.meshgrid(x, y)
+        # Get valid (non-zero) and invalid (zero) indices
+        valid_idx = np.where(array > 1)
+        invalid_idx = np.where(array <= 1)
+
+        # Interpolate only the invalid values
+        interp_values = interpolate.griddata(valid_idx, array[valid_idx],
+                            invalid_idx, method='nearest')
+
+        # Create a copy of the original image and replace the invalid values
+        # with interpolated values
+        inpainted = np.copy(array)
+        inpainted[invalid_idx] = interp_values
+        inpainted = inpainted.astype(np.float32)
+
+        depth_copy_uncropped = np.copy(inpainted)
 
         # Crop a square out of the middle of the depth and resize it to 300*300
-        crop_size = 400
-        depth_crop = cv2.resize(depth[(480-crop_size)//2:(480-crop_size)//2+crop_size, (640-crop_size)//2:(640-crop_size)//2+crop_size], (300, 300))
+        # Crop a square out of the middle of the depth and resize it to 300*300
+        crop_size = 300
+        depth_crop = cv2.resize(inpainted[(480-crop_size)//2:(480-crop_size)//2+crop_size, (640-crop_size)//2:(640-crop_size)//2+crop_size], (300, 300))
 
-        # Replace nan with 0 for inpainting.
-        depth_crop = depth_crop.copy()
-        depth_nan = np.isnan(depth_crop).copy()
-        depth_crop[depth_nan] = 0
+        depth_copy = np.copy(depth_crop)
+
+        depth_crop = depth_crop.astype(np.float32)
+        depth_crop = (depth_crop - np.mean(depth_crop)) / np.std(depth_crop)  # Now, your data is standardized
+        depth_crop = depth_crop / np.max(np.abs(depth_crop))  # This scales data to [-1, 1]
+
+
+        # plt.imshow(depth_crop, cmap='gray')
+        # plt.show()
+        # plt.pause(0.001)
+
 
     with TimeIt('Inpaint'):
         print('Inpaint..')
         # open cv inpainting does weird things at the border.
-        depth_crop = cv2.copyMakeBorder(depth_crop, 1, 1, 1, 1, cv2.BORDER_DEFAULT)
-
-        mask = (depth_crop == 0).astype(np.uint8)
-        # Scale to keep as float, but has to be in bounds -1:1 to keep opencv happy.
-        depth_scale = np.abs(depth_crop).max()
-        depth_crop = depth_crop.astype(np.float32)/depth_scale  # Has to be float32, 64 not supported.
-
-        depth_crop = cv2.inpaint(depth_crop, mask, 1, cv2.INPAINT_NS)
-
-        # Back to original size and value range.
-        depth_crop = depth_crop[1:-1, 1:-1]
-        depth_crop = depth_crop * depth_scale
+        # depth_crop = cv2.copyMakeBorder(depth_crop, 1, 1, 1, 1, cv2.BORDER_DEFAULT)
+        #
+        # mask = (depth_crop == 0).astype(np.uint8)
+        # # Scale to keep as float, but has to be in bounds -1:1 to keep opencv happy.
+        # depth_scale = np.abs(depth_crop).max()
+        # depth_crop = depth_crop.astype(np.float32)/depth_scale  # Has to be float32, 64 not supported.
+        #
+        # depth_crop = cv2.inpaint(depth_crop, mask, 1, cv2.INPAINT_NS)
+        #
+        # # Back to original size and value range.
+        # depth_crop = depth_crop[1:-1, 1:-1]
+        # depth_crop = depth_crop * depth_scale
 
     with TimeIt('Calculate Depth'):
         print('Calculate Depth..')
         # Figure out roughly the depth in mm of the part between the grippers for collision avoidance.
         depth_center = depth_crop[100:141, 130:171].flatten()
         depth_center.sort()
-        depth_center = depth_center[:10].mean() * 1000.0
+        depth_center = depth_center[:10].mean() # * 1000.0
+
+
 
     with TimeIt('Inference'):
         print('Inference..')
-        depth_crop = np.clip((depth_crop - depth_crop.mean()), -1, 1)
-        # Run it through the network.
-        # pred_out = sess.run(output_tensor, feed_dict={input_tensor: depth_crop.reshape((1, 300, 300, 1))})
-        tf.compat.v1.keras.backend.set_session(sess)
-        with graph.as_default():
-            pred_out = model.predict(depth_crop.reshape((1, 300, 300, 1)))
+
+        with torch.no_grad():
+                # Convert ndarray to tensor
+            depth_crop_tensor = torch.from_numpy(depth_crop)
+
+            # plt.imshow(depth_crop_tensor, cmap='gray')
+            # plt.title("My Depth Image")
+            # plt.show()
+            # plt.pause(0.001)
+
+            # Add a batch dimension if your model expects it
+            depth_crop_tensor = depth_crop_tensor.unsqueeze(0)
+            depth_crop_tensor = depth_crop_tensor.to(device)
+            pred_out_tuple = model(depth_crop_tensor)
+            list_on_cpu = [tensor.cpu().numpy() for tensor in pred_out_tuple]
+            # Convert list to numpy array
+            pred_out = np.array(list_on_cpu)
+
+            # print('pred_out', pred_out)
+
         print('test..')
         points_out = pred_out[0].squeeze()
-        points_out[depth_nan] = 0
+        print('points_out', points_out.shape)
+        # points_out[depth_nan] = 0
+
 
 
     with TimeIt('Trig'):
@@ -157,6 +209,9 @@ def depth_callback(depth_message):
         ang_out = np.arctan2(sin_out, cos_out)/2.0
 
         width_out = pred_out[3].squeeze() * 150.0  # Scaled 0-150:0-1
+
+        print('ang', 'width', ang_out, width_out)
+
 
     with TimeIt('Filter'):
         print('Filter..')
@@ -188,11 +243,14 @@ def depth_callback(depth_message):
         ang = ang_out[max_pixel[0], max_pixel[1]]
         width = width_out[max_pixel[0], max_pixel[1]]
 
+        print('ang', 'width', ang, width)
+
+
         # Convert max_pixel back to uncropped/resized image coordinates in order to do the camera transform.
         max_pixel = ((np.array(max_pixel) / 300.0 * crop_size) + np.array([(480 - crop_size)//2, (640 - crop_size) // 2]))
         max_pixel = np.round(max_pixel).astype(np.int)
 
-        point_depth = depth[max_pixel[0], max_pixel[1]]
+        point_depth = depth_data[max_pixel[0], max_pixel[1]]
 
         # These magic numbers are my camera intrinsic parameters.
         x = (max_pixel[1] - cx)/(fx) * point_depth
@@ -230,10 +288,12 @@ def depth_callback(depth_message):
         # Output the best grasp pose relative to camera.
         cmd_msg = Float32MultiArray()
         cmd_msg.data = [x, y, z, ang, width, depth_center]
+        print('cmd_msg.data', cmd_msg.data)
+
         cmd_pub.publish(cmd_msg)
 
 
-depth_sub = rospy.Subscriber('/camera/depth/image_meters', Image, depth_callback, queue_size=1)
+depth_sub = rospy.Subscriber('/camera/aligned_depth_to_color/image_raw', Image, depth_callback, queue_size=1)
 # robot_pos_sub = rospy.Subscriber('/base_link/out/tool_pose', PoseStamped, robot_pos_callback, queue_size=1)
 
 if __name__ == "__main__":

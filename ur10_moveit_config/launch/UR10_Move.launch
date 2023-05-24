@@ -17,10 +17,9 @@
 
     <include file="$(find ur10_moveit_config)/launch/moveit_planning_execution.launch" pass_all_args="true">
     
-     
-    
-
         
     </include> 
+
+
     
 </launch>

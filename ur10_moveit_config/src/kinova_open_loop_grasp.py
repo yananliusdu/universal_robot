@@ -221,13 +221,13 @@ if __name__ == '__main__':
 
     #gripper test
     print("Creating gripper...")
-    gripper = robotiq_gripper.RobotiqGripper()
+    # gripper = robotiq_gripper.RobotiqGripper()
     print("Connecting to gripper...")
-    gripper.connect(ip, 63352)
+    # gripper.connect(ip, 63352)
     print("Activating gripper...")
-    gripper.activate()
+    # gripper.activate()
     print("Testing gripper...")
-    gripper_grasp_width(gripper, 85)
+    # gripper_grasp_width(gripper, 85)
 
     # Home position.
     home_joints = [1.2071189880371094, -1.5567658583270472, -1.5380070845233362, -1.6654790083514612, 1.5725183486938477, 0.004621791187673807]
@@ -258,10 +258,10 @@ if __name__ == '__main__':
         rospy.sleep(0.5)
 
         # set_finger_positions
-        gripper_grasp_width(gripper, 85)
+        # gripper_grasp_width(gripper, 85)
         rospy.sleep(0.5)
         # start_record_srv(std_srvs.srv.TriggerRequest())
-        execute_grasp(gripper)
+        # execute_grasp(gripper)
         rospy.sleep(0.5)
 
         # move to release
@@ -270,7 +270,7 @@ if __name__ == '__main__':
         # move_to_pose(TCP)
 
         #open gripper
-        gripper_grasp_width(gripper, 85)
+        # gripper_grasp_width(gripper, 85)
         print('a loop done')
 
 

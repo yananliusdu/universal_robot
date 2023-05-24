@@ -4,9 +4,9 @@ import time
 import os
 from os import path
 import numpy as np
-import torch
-import matplotlib
-import matplotlib.pyplot as plt
+import tensorflow as tf
+import tensorflow.keras
+from tensorflow.keras.models import load_model
 
 import cv2
 import scipy.ndimage as ndimage
@@ -19,22 +19,29 @@ from geometry_msgs.msg import PoseStamped
 from sensor_msgs.msg import Image, CameraInfo
 from std_msgs.msg import Float32MultiArray
 import moveit_commander
-from scipy import interpolate
 
+import matplotlib
+import matplotlib.pyplot as plt
 
 matplotlib.use('TkAgg')
+
+
 # CPU used here
 os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
 bridge = CvBridge()
 
-# Check if CUDA is available and choose device accordingly
-device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
-print('device', device)
 
+#disable the eager model
+tf.compat.v1.disable_eager_execution()
 # Load the Network.
-MODEL_FILE = 'models/epoch_42_iou_0.73'
-model = torch.load(MODEL_FILE, map_location=device)
-model.eval()
+MODEL_FILE = 'models/epoch_29_model.hdf5'
+sess = tf.compat.v1.keras.backend.get_session()
+tf.compat.v1.keras.backend.set_session(sess)
+# graph = tf.get_default_graph()
+# Tensorflow graph to allow use in callback.
+graph = tf.compat.v1.get_default_graph()
+# model = load_model(MODEL_FILE)
+model = load_model(path.join(path.dirname(__file__), MODEL_FILE))
 
 
 rospy.init_node('ggcnn_detection')
@@ -54,13 +61,12 @@ ROBOT_Z = 0
 
 # Get the camera parameters
 camera_info_msg = rospy.wait_for_message('/camera/depth/camera_info', CameraInfo)
+print(camera_info_msg)
 K = camera_info_msg.K
 fx = K[0]
 cx = K[2]
 fy = K[4]
 cy = K[5]
-
-print('K',K)
 
 
 # Execution Timing
@@ -102,17 +108,11 @@ def depth_callback(depth_message):
 
     with TimeIt('Crop'):
         print('croping..')
-
         depth = bridge.imgmsg_to_cv2(depth_message)
-        # depth = cv2.normalize(depth, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
-        # print('depth', depth.shape)
-        # print('depth', depth)
-        # cv2.imshow('Real-Time Image', depth)
 
-        numpy_array = np.array(depth, dtype=np.float32)
-        plt.imshow(numpy_array, cmap='gray')
-        plt.show()
-        plt.pause(0.001)
+        # plt.imshow(depth, cmap='gray')
+        # plt.show()
+        # plt.pause(0.001)
 
         # Crop a square out of the middle of the depth and resize it to 300*300
         crop_size = 400
@@ -123,9 +123,10 @@ def depth_callback(depth_message):
         depth_nan = np.isnan(depth_crop).copy()
         depth_crop[depth_nan] = 0
 
-        plt.imshow(depth_crop, cmap='gray')
-        plt.show()
-        plt.pause(0.001)
+        # plt.imshow(depth_crop, cmap='gray')
+        # plt.show()
+        # plt.pause(0.001)
+
 
     with TimeIt('Inpaint'):
         print('Inpaint..')
@@ -139,17 +140,9 @@ def depth_callback(depth_message):
 
         depth_crop = cv2.inpaint(depth_crop, mask, 1, cv2.INPAINT_NS)
 
-        # plt.imshow(depth_crop, cmap='gray')
-        # plt.show()
-        # plt.pause(0.001)
-
-
-
         # Back to original size and value range.
         depth_crop = depth_crop[1:-1, 1:-1]
         depth_crop = depth_crop * depth_scale
-
-
 
     with TimeIt('Calculate Depth'):
         print('Calculate Depth..')
@@ -158,42 +151,24 @@ def depth_callback(depth_message):
         depth_center.sort()
         depth_center = depth_center[:10].mean() * 1000.0
 
+
+
     with TimeIt('Inference'):
         print('Inference..')
         depth_crop = np.clip((depth_crop - depth_crop.mean()), -1, 1)
-
-        # plt.imshow(depth_crop, cmap='gray')
-        # plt.title("My Depth Image")
-        # plt.show()
-        # plt.pause(0.001)
-
-        # cv2.imshow('Real-Time Image', depth_crop)
-            # Exit the loop when 'q' is pressed
-        # if cv2.waitKey(1) & 0xFF == ord('q'):
-        #     break
-
-        # print('depth_crop', depth_crop)
-        print('depth_crop', depth_crop.shape)
-
-        with torch.no_grad():
-                # Convert ndarray to tensor
-            depth_crop_tensor = torch.from_numpy(depth_crop)
-
-            # plt.imshow(depth_crop_tensor, cmap='gray')
-            # plt.title("My Depth Image")
-            # plt.show()
-            # plt.pause(0.001)
-
-            # Add a batch dimension if your model expects it
-            depth_crop_tensor = depth_crop_tensor.unsqueeze(0)
-            depth_crop_tensor = depth_crop_tensor.to(device)
-
-            pred_out = model(depth_crop_tensor)
-            # print('pred_out', pred_out)
-
+        # Run it through the network.
+        # pred_out = sess.run(output_tensor, feed_dict={input_tensor: depth_crop.reshape((1, 300, 300, 1))})
+        tf.compat.v1.keras.backend.set_session(sess)
+        with graph.as_default():
+            pred_out = model.predict(depth_crop.reshape((1, 300, 300, 1)))
         print('test..')
+        print('pred_out', pred_out)
+
         points_out = pred_out[0].squeeze()
         points_out[depth_nan] = 0
+
+        print('points_out', points_out.shape)
+
 
 
     with TimeIt('Trig'):
@@ -206,6 +181,7 @@ def depth_callback(depth_message):
         width_out = pred_out[3].squeeze() * 150.0  # Scaled 0-150:0-1
 
         print('ang', 'width', ang_out, width_out)
+
 
     with TimeIt('Filter'):
         print('Filter..')
@@ -236,9 +212,9 @@ def depth_callback(depth_message):
 
         ang = ang_out[max_pixel[0], max_pixel[1]]
         width = width_out[max_pixel[0], max_pixel[1]]
-        width = width.item()
 
         print('ang', 'width', ang, width)
+
 
         # Convert max_pixel back to uncropped/resized image coordinates in order to do the camera transform.
         max_pixel = ((np.array(max_pixel) / 300.0 * crop_size) + np.array([(480 - crop_size)//2, (640 - crop_size) // 2]))
@@ -282,12 +258,12 @@ def depth_callback(depth_message):
         # Output the best grasp pose relative to camera.
         cmd_msg = Float32MultiArray()
         cmd_msg.data = [x, y, z, ang, width, depth_center]
-
         print('cmd_msg.data', cmd_msg.data)
+
         cmd_pub.publish(cmd_msg)
 
 
-# depth_sub = rospy.Subscriber('/camera/depth/image_meters', Image, depth_callback, queue_size=1)
+depth_sub = rospy.Subscriber('/camera/depth/image_meters', Image, depth_callback, queue_size=1)
 # robot_pos_sub = rospy.Subscriber('/base_link/out/tool_pose', PoseStamped, robot_pos_callback, queue_size=1)
 
 if __name__ == "__main__":

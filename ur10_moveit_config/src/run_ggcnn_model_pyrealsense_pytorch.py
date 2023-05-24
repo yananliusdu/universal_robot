@@ -8,6 +8,7 @@ import torch
 import matplotlib
 import matplotlib.pyplot as plt
 
+
 import cv2
 import scipy.ndimage as ndimage
 from skimage.draw import disk
@@ -17,14 +18,30 @@ import rospy, sys
 from cv_bridge import CvBridge
 from geometry_msgs.msg import PoseStamped
 from sensor_msgs.msg import Image, CameraInfo
+from sensor_msgs.msg import JointState
 from std_msgs.msg import Float32MultiArray
 import moveit_commander
 from scipy import interpolate
 
+import pyrealsense2 as rs
+pipeline = rs.pipeline()
+
+
+
+config = rs.config()
+config.enable_stream(rs.stream.depth, 640, 480, rs.format.z16, 30)
+config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)
+profile = pipeline.start(config)
+
+depth_sensor = profile.get_device().first_depth_sensor()
+depth_scale = depth_sensor.get_depth_scale()
+print("Depth Scale is: " , depth_scale)
+
+align_to = rs.stream.color
+align = rs.align(align_to)
 
 matplotlib.use('TkAgg')
-# CPU used here
-os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+
 bridge = CvBridge()
 
 # Check if CUDA is available and choose device accordingly
@@ -47,21 +64,27 @@ ang_pub = rospy.Publisher('ggcnn/img/ang', Image, queue_size=1)
 cmd_pub = rospy.Publisher('ggcnn/out/command', Float32MultiArray, queue_size=1)
 
 
-# Initialise some globals.
-prev_mp = np.array([150, 150])
-ROBOT_Z = 0
+# Get the color camera's intrinsics
+# depth_intrinsics = rs.video_stream_profile(profile.get_stream(rs.stream.depth)).get_intrinsics()
 
+# print('camera intrinsics:' , depth_intrinsics)
 
 # Get the camera parameters
-camera_info_msg = rospy.wait_for_message('/camera/depth/camera_info', CameraInfo)
-K = camera_info_msg.K
+K = [386.30255126953125, 0.0, 320.8498229980469, 0.0, 386.30255126953125, 245.2843475341797, 0.0, 0.0, 1.0]
 fx = K[0]
 cx = K[2]
 fy = K[4]
 cy = K[5]
 
-print('K',K)
+# fx and fy represent the focal lengths of the camera,
+# cx and cy represent the principal point coordinates within the intrinsic matrix.
+# fx, fy = 386.303, 386.303
+# cx, cy = 320.85, 245.284
 
+
+# Initialise some globals.
+prev_mp = np.array([150, 150])
+ROBOT_Z = 0
 
 # Execution Timing
 class TimeIt:
@@ -83,6 +106,7 @@ class TimeIt:
 # def robot_pos_callback(data):
 #     global ROBOT_Z
 #     ROBOT_Z = data.pose.position.z
+#     print('test....call back')
 
 def return_tip():
     pos=arm.get_current_pose().pose
@@ -91,7 +115,8 @@ def return_tip():
     Z = pos.position.z
     return Z
 
-def depth_callback(depth_message):
+
+def robot_pos_callback(JointState):
     global model
     global graph
     global prev_mp
@@ -103,25 +128,63 @@ def depth_callback(depth_message):
     with TimeIt('Crop'):
         print('croping..')
 
-        depth = bridge.imgmsg_to_cv2(depth_message)
+        frames = pipeline.wait_for_frames()
+        aligned_frames = align.process(frames)
+        aligned_depth_frame = aligned_frames.get_depth_frame()
+        # color_frame = aligned_frames.get_color_frame()
+
+        # if not aligned_depth_frame or not color_frame:
+        #     continue
+
+        depth_data = np.asanyarray(aligned_depth_frame.get_data(), dtype="float16")
+        # depth_image = np.asanyarray(aligned_depth_frame.get_data())
+        # depth_mapped_image = cv2.applyColorMap(cv2.convertScaleAbs(depth_image, alpha=0.03), cv2.COLORMAP_JET)
+
+        # plt.imshow(frames, cmap='gray')
+        # plt.show()
+        # plt.pause(0.001)
+
+        array = np.copy(depth_data)
+                # Create x and y coordinates
+        x = np.arange(0, array.shape[1])
+        y = np.arange(0, array.shape[0])
+        xx, yy = np.meshgrid(x, y)
+        # Get valid (non-zero) and invalid (zero) indices
+        valid_idx = np.where(array > 1)
+        invalid_idx = np.where(array <= 1)
+
+        # Interpolate only the invalid values
+        interp_values = interpolate.griddata(valid_idx, array[valid_idx],
+                            invalid_idx, method='nearest')
+
+        # Create a copy of the original image and replace the invalid values
+        # with interpolated values
+        inpainted = np.copy(array)
+        inpainted[invalid_idx] = interp_values
+        inpainted = inpainted.astype(np.float32)
+
+        depth_copy_uncropped = np.copy(inpainted)
+
+        # depth = bridge.imgmsg_to_cv2(depth_message)
         # depth = cv2.normalize(depth, None, 0, 255, cv2.NORM_MINMAX, dtype=cv2.CV_8U)
         # print('depth', depth.shape)
         # print('depth', depth)
         # cv2.imshow('Real-Time Image', depth)
-
-        numpy_array = np.array(depth, dtype=np.float32)
-        plt.imshow(numpy_array, cmap='gray')
-        plt.show()
-        plt.pause(0.001)
+        # plt.imshow(depth, cmap='gray')
+        # plt.show()
+        # plt.pause(0.001)
+        # numpy_array = np.array(depth, dtype=np.float32)
+        # print(numpy_array)
 
         # Crop a square out of the middle of the depth and resize it to 300*300
-        crop_size = 400
-        depth_crop = cv2.resize(depth[(480-crop_size)//2:(480-crop_size)//2+crop_size, (640-crop_size)//2:(640-crop_size)//2+crop_size], (300, 300))
+        crop_size = 300
+        depth_crop = cv2.resize(inpainted[(480-crop_size)//2:(480-crop_size)//2+crop_size, (640-crop_size)//2:(640-crop_size)//2+crop_size], (300, 300))
 
-        # Replace nan with 0 for inpainting.
-        depth_crop = depth_crop.copy()
-        depth_nan = np.isnan(depth_crop).copy()
-        depth_crop[depth_nan] = 0
+        depth_copy = np.copy(depth_crop)
+
+        depth_crop = depth_crop.astype(np.float32)
+        depth_crop = (depth_crop - np.mean(depth_crop)) / np.std(depth_crop)  # Now, your data is standardized
+        depth_crop = depth_crop / np.max(np.abs(depth_crop))  # This scales data to [-1, 1]
 
         plt.imshow(depth_crop, cmap='gray')
         plt.show()
@@ -130,37 +193,34 @@ def depth_callback(depth_message):
     with TimeIt('Inpaint'):
         print('Inpaint..')
         # open cv inpainting does weird things at the border.
-        depth_crop = cv2.copyMakeBorder(depth_crop, 1, 1, 1, 1, cv2.BORDER_DEFAULT)
-
-        mask = (depth_crop == 0).astype(np.uint8)
-        # Scale to keep as float, but has to be in bounds -1:1 to keep opencv happy.
-        depth_scale = np.abs(depth_crop).max()
-        depth_crop = depth_crop.astype(np.float32)/depth_scale  # Has to be float32, 64 not supported.
-
-        depth_crop = cv2.inpaint(depth_crop, mask, 1, cv2.INPAINT_NS)
-
+        # depth_crop = cv2.copyMakeBorder(depth_crop, 1, 1, 1, 1, cv2.BORDER_DEFAULT)
+        #
+        # mask = (depth_crop == 0).astype(np.uint8)
+        # # Scale to keep as float, but has to be in bounds -1:1 to keep opencv happy.
+        # depth_scale = np.abs(depth_crop).max()
+        # depth_crop = depth_crop.astype(np.float32)/depth_scale  # Has to be float32, 64 not supported.
+        #
+        # depth_crop = cv2.inpaint(depth_crop, mask, 1, cv2.INPAINT_NS)
+        #
         # plt.imshow(depth_crop, cmap='gray')
         # plt.show()
         # plt.pause(0.001)
 
-
-
         # Back to original size and value range.
-        depth_crop = depth_crop[1:-1, 1:-1]
-        depth_crop = depth_crop * depth_scale
-
+        # depth_crop = depth_crop[1:-1, 1:-1]
+        # depth_crop = depth_crop * depth_scale
 
 
     with TimeIt('Calculate Depth'):
         print('Calculate Depth..')
         # Figure out roughly the depth in mm of the part between the grippers for collision avoidance.
-        depth_center = depth_crop[100:141, 130:171].flatten()
+        depth_center = depth_copy[100:141, 130:171].flatten()
         depth_center.sort()
-        depth_center = depth_center[:10].mean() * 1000.0
+        depth_center = depth_center[:10].mean() # *1000
 
     with TimeIt('Inference'):
         print('Inference..')
-        depth_crop = np.clip((depth_crop - depth_crop.mean()), -1, 1)
+        # depth_crop = np.clip((depth_crop - depth_crop.mean()), -1, 1)
 
         # plt.imshow(depth_crop, cmap='gray')
         # plt.title("My Depth Image")
@@ -173,7 +233,7 @@ def depth_callback(depth_message):
         #     break
 
         # print('depth_crop', depth_crop)
-        print('depth_crop', depth_crop.shape)
+        # print('depth_crop', depth_crop.shape)
 
         with torch.no_grad():
                 # Convert ndarray to tensor
@@ -187,13 +247,17 @@ def depth_callback(depth_message):
             # Add a batch dimension if your model expects it
             depth_crop_tensor = depth_crop_tensor.unsqueeze(0)
             depth_crop_tensor = depth_crop_tensor.to(device)
+            pred_out_tuple = model(depth_crop_tensor)
+            list_on_cpu = [tensor.cpu().numpy() for tensor in pred_out_tuple]
+            # Convert list to numpy array
+            pred_out = np.array(list_on_cpu)
 
-            pred_out = model(depth_crop_tensor)
             # print('pred_out', pred_out)
 
         print('test..')
         points_out = pred_out[0].squeeze()
-        points_out[depth_nan] = 0
+        print('points_out', points_out.shape)
+        # points_out[depth_nan] = 0
 
 
     with TimeIt('Trig'):
@@ -244,7 +308,7 @@ def depth_callback(depth_message):
         max_pixel = ((np.array(max_pixel) / 300.0 * crop_size) + np.array([(480 - crop_size)//2, (640 - crop_size) // 2]))
         max_pixel = np.round(max_pixel).astype(np.int)
 
-        point_depth = depth[max_pixel[0], max_pixel[1]]
+        point_depth = depth_copy_uncropped[max_pixel[0], max_pixel[1]]/1000.0
 
         # These magic numbers are my camera intrinsic parameters.
         x = (max_pixel[1] - cx)/(fx) * point_depth
@@ -272,10 +336,10 @@ def depth_callback(depth_message):
         print('Publish..')
         # Publish the output images (not used for control, only visualisation)
         grasp_img = bridge.cv2_to_imgmsg(grasp_img)
-        grasp_img.header = depth_message.header
+        grasp_img.header = 0 #depth_message.header
         grasp_pub.publish(grasp_img)
         grasp_img_plain = bridge.cv2_to_imgmsg(grasp_img_plain)
-        grasp_img_plain.header = depth_message.header
+        grasp_img_plain.header = 0 #depth_message.header
         grasp_plain_pub.publish(grasp_img_plain)
         depth_pub.publish(bridge.cv2_to_imgmsg(depth_crop))
         ang_pub.publish(bridge.cv2_to_imgmsg(ang_out))
@@ -288,7 +352,7 @@ def depth_callback(depth_message):
 
 
 # depth_sub = rospy.Subscriber('/camera/depth/image_meters', Image, depth_callback, queue_size=1)
-# robot_pos_sub = rospy.Subscriber('/base_link/out/tool_pose', PoseStamped, robot_pos_callback, queue_size=1)
+robot_pos_sub = rospy.Subscriber('/joint_states', JointState, robot_pos_callback, queue_size=1)
 
 if __name__ == "__main__":
 
